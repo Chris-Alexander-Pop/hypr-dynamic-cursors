@@ -488,3 +488,97 @@ void CDynamicCursors::dispatchMagnify(std::optional<int> duration, std::optional
 
     shake.force(duration, size);
 }
+
+static bool snap_usable(const SModeResult& snap) {
+    return std::isfinite(snap.rotation) && std::isfinite(snap.scale) && snap.scale > 0 && std::isfinite(snap.stretch.angle) &&
+        std::isfinite(snap.stretch.magnitude.x) && std::isfinite(snap.stretch.magnitude.y) && snap.stretch.magnitude.x > 0 && snap.stretch.magnitude.y > 0;
+}
+
+static bool snap_is_identity(const SModeResult& snap) {
+    return std::abs(snap.rotation) < 1e-4 && std::abs(snap.scale - 1.0) < 1e-4 && std::abs(snap.stretch.angle) < 1e-4 &&
+        std::abs(snap.stretch.magnitude.x - 1.0) < 1e-4 && std::abs(snap.stretch.magnitude.y - 1.0) < 1e-4;
+}
+
+void CDynamicCursors::onFreezeBegin() {
+    if (!snap_usable(resultShown)) {
+        resultFrozen.reset();
+        return;
+    }
+    resultFrozen = resultShown;
+}
+
+void CDynamicCursors::onFreezeEnd() {
+    resultFrozen.reset();
+}
+
+bool CDynamicCursors::renderFreezePin(Pointer::CPointerManager* pointers, PHLMONITOR pMonitor, const Vector2D& localPos) {
+    try {
+        if (!resultFrozen || !pointers || !pMonitor || !g_pHyprRenderer)
+            return false;
+
+        const auto snap = *resultFrozen;
+        // No angle to keep. Hyprland draws the plain cursor.
+        if (!snap_usable(snap) || snap_is_identity(snap))
+            return false;
+
+        auto tex = pointers->freezeCursorTexture();
+        if (!tex)
+            return false;
+
+        const auto hot  = pointers->freezeCursorHotspot();
+        auto       size = pointers->freezeCursorSize();
+        if (!std::isfinite(hot.x) || !std::isfinite(hot.y) || !std::isfinite(size.x) || !std::isfinite(size.y) || size.x <= 0 || size.y <= 0)
+            return false;
+
+        const auto zoom = snap.scale;
+        CBox       box{localPos - hot, size};
+        if (zoom != 1.0) {
+            box.x -= hot.x * (zoom - 1.0);
+            box.y -= hot.y * (zoom - 1.0);
+            box.w *= zoom;
+            box.h *= zoom;
+        }
+        if (box.intersection(CBox{{}, {pMonitor->m_size}}).empty())
+            return true;
+
+        box.scale(pMonitor->m_scale);
+        box.x   = std::round(box.x);
+        box.y   = std::round(box.y);
+        box.rot = snap.rotation;
+
+        CCursorPassElement::SRenderData data;
+        data.tex              = tex;
+        data.box              = box;
+        data.hotspot          = hot * pMonitor->m_scale * zoom;
+        data.nearest          = false;
+        data.stretchAngle     = snap.stretch.angle;
+        data.stretchMagnitude = snap.stretch.magnitude;
+        g_pHyprRenderer->m_renderPass.add(makeUnique<CCursorPassElement>(data));
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+void CDynamicCursors::expandFreezeDamage(Pointer::CPointerManager* pointers, PHLMONITOR pMonitor, CRegion& damage, const Vector2D& globalPin) {
+    try {
+        if (!resultFrozen || !pointers || !pMonitor)
+            return;
+        const auto snap = *resultFrozen;
+        if (!snap_usable(snap) || snap_is_identity(snap))
+            return;
+
+        const auto size = pointers->freezeCursorSize();
+        if (!std::isfinite(size.x) || !std::isfinite(size.y) || size.x <= 0 || size.y <= 0)
+            return;
+        const auto rad  = std::hypot(size.x, size.y) * snap.scale;
+        const auto spot = globalPin - pMonitor->m_position;
+        if (!std::isfinite(rad) || !std::isfinite(spot.x) || !std::isfinite(spot.y))
+            return;
+        CBox box{spot - Vector2D{rad, rad}, Vector2D{rad * 2, rad * 2}};
+        if (box.intersection(CBox{{}, {pMonitor->m_size}}).empty())
+            return;
+        damage.add(box.expand(4).scale(pMonitor->m_scale).round());
+    } catch (...) {
+    }
+}

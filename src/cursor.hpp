@@ -1,5 +1,6 @@
-#include <any>    // IWYU pragma: keep
-#include <chrono> // IWYU pragma: keep
+#include <any>      // IWYU pragma: keep
+#include <chrono>   // IWYU pragma: keep
+#include <optional> // IWYU pragma: keep
 #define private public
 #include <hyprland/src/pointer/PointerManager.hpp>
 #undef private
@@ -44,6 +45,13 @@ class CDynamicCursors {
     /* hook on move, indicate that next onCursorMoved is actual move */
     void setMove();
 
+    /* snapshot the live angle when the freeze pin is created */
+    void onFreezeBegin();
+    void onFreezeEnd();
+    /* true when this drew the pin, so the upright theme image is skipped */
+    bool renderFreezePin(Pointer::CPointerManager* pointers, PHLMONITOR pMonitor, const Vector2D& localPos);
+    void expandFreezeDamage(Pointer::CPointerManager* pointers, PHLMONITOR pMonitor, CRegion& damage, const Vector2D& globalPin);
+
     void dispatchMagnify(std::optional<int> duration, std::optional<float> size);
 
   private:
@@ -57,7 +65,8 @@ class CDynamicCursors {
     double      resultShake;
     Vector2D    lastPos; // used for warp compensation
 
-    SModeResult resultShown;
+    SModeResult                resultShown;
+    std::optional<SModeResult> resultFrozen;
 
     // whether we have already locked software for cursor zoom
     bool zoomSoftware = false;

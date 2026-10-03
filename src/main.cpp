@@ -92,6 +92,59 @@ void                  hkMove(void* thisptr, const Vector2D& deltaLogical) {
     (*(origMove)g_pMoveHook->m_original)(thisptr, deltaLogical);
 }
 
+typedef void (*origBeginFreezeCursor)(void*);
+inline CFunctionHook* g_pBeginFreezeCursorHook = nullptr;
+void                  hkBeginFreezeCursor(void* thisptr) {
+    if (g_pDynamicCursors && g_pConfigHandler && g_pConfigHandler->isEnabled()) {
+        try {
+            g_pDynamicCursors->onFreezeBegin();
+        } catch (...) {
+        }
+    }
+    if (g_pBeginFreezeCursorHook && g_pBeginFreezeCursorHook->m_original)
+        (*(origBeginFreezeCursor)g_pBeginFreezeCursorHook->m_original)(thisptr);
+}
+
+typedef void (*origEndFreezeCursor)(void*);
+inline CFunctionHook* g_pEndFreezeCursorHook = nullptr;
+void                  hkEndFreezeCursor(void* thisptr) {
+    if (g_pEndFreezeCursorHook && g_pEndFreezeCursorHook->m_original)
+        (*(origEndFreezeCursor)g_pEndFreezeCursorHook->m_original)(thisptr);
+    if (g_pDynamicCursors && g_pConfigHandler && g_pConfigHandler->isEnabled()) {
+        try {
+            g_pDynamicCursors->onFreezeEnd();
+        } catch (...) {
+        }
+    }
+}
+
+typedef void (*origRenderFreezePinAt)(void*, PHLMONITOR, const Vector2D&);
+inline CFunctionHook* g_pRenderFreezePinAtHook = nullptr;
+void                  hkRenderFreezePinAt(void* thisptr, PHLMONITOR pMonitor, const Vector2D& localPos) {
+    if (g_pDynamicCursors && g_pConfigHandler && g_pConfigHandler->isEnabled()) {
+        try {
+            if (g_pDynamicCursors->renderFreezePin((Pointer::CPointerManager*)thisptr, pMonitor, localPos))
+                return;
+        } catch (...) {
+        }
+    }
+    if (g_pRenderFreezePinAtHook && g_pRenderFreezePinAtHook->m_original)
+        (*(origRenderFreezePinAt)g_pRenderFreezePinAtHook->m_original)(thisptr, pMonitor, localPos);
+}
+
+typedef void (*origIncludeFreezePinDamage)(void*, PHLMONITOR, CRegion&, const Vector2D&);
+inline CFunctionHook* g_pIncludeFreezePinDamageHook = nullptr;
+void                  hkIncludeFreezePinDamage(void* thisptr, PHLMONITOR pMonitor, CRegion& damage, const Vector2D& globalPin) {
+    if (g_pIncludeFreezePinDamageHook && g_pIncludeFreezePinDamageHook->m_original)
+        (*(origIncludeFreezePinDamage)g_pIncludeFreezePinDamageHook->m_original)(thisptr, pMonitor, damage, globalPin);
+    if (g_pDynamicCursors && g_pConfigHandler && g_pConfigHandler->isEnabled()) {
+        try {
+            g_pDynamicCursors->expandFreezeDamage((Pointer::CPointerManager*)thisptr, pMonitor, damage, globalPin);
+        } catch (...) {
+        }
+    }
+}
+
 typedef void (*origUpdateTheme)(void*);
 inline CFunctionHook* g_pUpdateThemeHook = nullptr;
 void                  hkUpdateTheme(void* thisptr) {
@@ -164,6 +217,19 @@ CFunctionHook* hook(void* target, std::string signature, void* handler) {
     return hook;
 }
 
+// Freeze hooks are optional. A missing symbol leaves the upright pin in place.
+CFunctionHook* hook_optional(void* target, std::string signature, void* handler) {
+    try {
+        return hook(target, signature, handler);
+    } catch (const std::exception& e) {
+        LOG(Log::ERR, "[dynamic-cursors] freeze hook skipped: {}", e.what());
+        return nullptr;
+    } catch (...) {
+        LOG(Log::ERR, "[dynamic-cursors] freeze hook skipped");
+        return nullptr;
+    }
+}
+
 APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     PHANDLE = handle;
 
@@ -230,6 +296,26 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
             pmf_address(&Pointer::Cursor::CCursorManager::updateTheme),
             "_ZN7Pointer6Cursor14CCursorManager11updateThemeEv",
             (void*) &hkUpdateTheme
+        );
+        g_pBeginFreezeCursorHook = hook_optional(
+            pmf_address(&Pointer::CPointerManager::beginFreezeCursor),
+            "_ZN7Pointer15CPointerManager17beginFreezeCursorEv",
+            (void*) &hkBeginFreezeCursor
+        );
+        g_pEndFreezeCursorHook = hook_optional(
+            pmf_address(&Pointer::CPointerManager::endFreezeCursor),
+            "_ZN7Pointer15CPointerManager15endFreezeCursorEv",
+            (void*) &hkEndFreezeCursor
+        );
+        g_pRenderFreezePinAtHook = hook_optional(
+            pmf_address(&Pointer::CPointerManager::renderFreezePinAt),
+            "_ZN7Pointer15CPointerManager17renderFreezePinAtEN9Hyprutils6Memory14CSharedPointerIN7Monitor8CMonitorEEERKNS1_4Math8Vector2DE",
+            (void*) &hkRenderFreezePinAt
+        );
+        g_pIncludeFreezePinDamageHook = hook_optional(
+            pmf_address(&Pointer::CPointerManager::includeFreezePinDamage),
+            "_ZN7Pointer15CPointerManager22includeFreezePinDamageEN9Hyprutils6Memory14CSharedPointerIN7Monitor8CMonitorEEERNS1_4Math7CRegionERKNS7_8Vector2DE",
+            (void*) &hkIncludeFreezePinDamage
         );
         // clang-format on
     } catch (std::exception& e) {
